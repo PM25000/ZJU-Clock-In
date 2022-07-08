@@ -8,15 +8,14 @@ import re
 import datetime
 import time
 import sys
-import ddddocr
-
+# import ddddocr
 
 class ClockIn(object):
     """Hit card class
+
     Attributes:
         username: (str) 浙大统一认证平台用户名（一般为学号）
         password: (str) 浙大统一认证平台密码
-        eai_sess: (str) cookie of healthreport.zju.edu.cn/ncov/wap/default/index
         LOGIN_URL: (str) 登录url
         BASE_URL: (str) 打卡首页url
         SAVE_URL: (str) 提交打卡url
@@ -26,17 +25,14 @@ class ClockIn(object):
     LOGIN_URL = "https://zjuam.zju.edu.cn/cas/login?service=https%3A%2F%2Fhealthreport.zju.edu.cn%2Fa_zju%2Fapi%2Fsso%2Findex%3Fredirect%3Dhttps%253A%252F%252Fhealthreport.zju.edu.cn%252Fncov%252Fwap%252Fdefault%252Findex"
     BASE_URL = "https://healthreport.zju.edu.cn/ncov/wap/default/index"
     SAVE_URL = "https://healthreport.zju.edu.cn/ncov/wap/default/save"
-    CAPTCHA_URL = 'https://healthreport.zju.edu.cn/ncov/wap/default/code'
+ #   captcha_url = "https://healthreport.zju.edu.cn/ncov/wap/default/code"
     HEADERS = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.100 Safari/537.36"
     }
-    
-    def __init__(self, username, password, eai_sess):
+    def __init__(self, username, password):
         self.username = username
         self.password = password
-        self.eai_sess = eai_sess
         self.sess = requests.Session()
-        self.ocr = ddddocr.DdddOcr()
 
     def login(self):
         """Login to ZJU platform"""
@@ -71,21 +67,15 @@ class ClockIn(object):
         today = datetime.date.today()
         return "%4d%02d%02d" % (today.year, today.month, today.day)
 
-    def get_captcha(self):
-        """Get CAPTCHA code"""
-        cookie_dict = {'eai-sess': self.eai_sess}
-        self.sess.cookies = requests.cookies.cookiejar_from_dict(cookie_dict)
-        resp = self.sess.get(self.CAPTCHA_URL)
-        captcha = self.ocr.classification(resp.content)
-        print("验证码：", captcha)
-        return captcha
-
     def get_info(self, html=None):
         """Get hitcard info, which is the old info with updated new time."""
         if not html:
             res = self.sess.get(self.BASE_URL, headers=self.HEADERS)
             html = res.content.decode()
-
+            # 新建ocr，并读取验证码进行识别
+     #       ocr = ddddocr.DdddOcr(old=True)
+     #       resp = self.sess.get(self.captcha_url, headers=self.HEADERS)
+     #       captcha = ocr.classification(resp.content)
         try:
             old_infos = re.findall(r'oldInfo: ({[^\n]+})', html)
             if len(old_infos) != 0:
@@ -121,8 +111,14 @@ class ClockIn(object):
         new_info['jcqzrq'] = ""
         new_info['gwszdd'] = ""
         new_info['szgjcs'] = ""
-        new_info['verifyCode'] = self.get_captcha()
-
+        
+        # add in 2022.07.08
+        new_info['sfymqjczrj'] = 2  #同住人员是否发热
+        new_info['ismoved'] = 4     #是否有离开
+        new_info['internship'] = 3  #是否进行实习
+        new_info['sfcxzysx'] = 2    #是否涉及疫情管控
+        
+   #     new_info['verifyCode'] = captcha
         # 2021.08.05 Fix 2
         magics = re.findall(r'"([0-9a-f]{32})":\s*"([^\"]+)"', html)
         for item in magics:
@@ -156,18 +152,18 @@ class DecodeError(Exception):
     pass
 
 
-def main(username, password, eai_sess):
+def main(username, password):
     """Hit card process
+
     Arguments:
         username: (str) 浙大统一认证平台用户名（一般为学号）
         password: (str) 浙大统一认证平台密码
-        eai-sess: (str) cookie of healthreport.zju.edu.cn/ncov/wap/default/index
     """
     print("\n[Time] %s" %
           datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     print("🚌 打卡任务启动")
 
-    dk = ClockIn(username, password, eai_sess)
+    dk = ClockIn(username, password)
 
     print("登录到浙大统一身份认证平台...")
     try:
@@ -194,13 +190,17 @@ def main(username, password, eai_sess):
             print(res['m'])
             if res['m'].find("已经") != -1: # 已经填报过了 不报错
                 pass
-            elif res['m'].find("验证码错误") != -1: # 验证码错误
-                print('再次尝试')
-                time.sleep(5)
-                main(username, password, eai_sess)
-                pass
             else:
-                raise Exception
+                count = 0
+                while (str(res['e']) != '0' and count < 3):
+                    time.sleep(5)
+                    dk.get_info()
+                    res = dk.post()
+                    count +=1
+                if str(res['e']) == '0':
+                    print('已为您打卡成功！')
+                else:
+                    raise Exception
     except Exception:
         print('数据提交失败')
         raise Exception
@@ -209,8 +209,7 @@ def main(username, password, eai_sess):
 if __name__ == "__main__":
     username = sys.argv[1]
     password = sys.argv[2]
-    eai_sess = sys.argv[3]
     try:
-        main(username, password, eai_sess)
+        main(username, password)
     except Exception:
         exit(1)
